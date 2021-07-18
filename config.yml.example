@@ -1,0 +1,67 @@
+port: 67  # optional
+listen: # optional
+  - 192.168.178.2
+  - 127.0.0.1
+sources:
+  - kind: rest
+    config:
+      offer: &offer # server ask for offer packet
+        scripts:  # runs one by one
+          - exec: /bin/echo # executable
+            args:
+              - "mac: {{ client_hardware_address }} -> ip: {{ client_ip_address }}"
+            wait: false # wait before send - could break dhcp conversion
+            timeout: 2  # optional - script timeout
+        queries:  # runs one by one
+          - url: "https://somehost.local/hosts?mac={{ client_hardware_address }}" # url to query - expect json
+            name: hosts # name for later usage in templating: results.<name>
+            method: GET # http method
+            ssl_verify: false # verify ssl requests
+            headers: &header  # headers additional headers
+              token: secret
+            cache: &cache 5 # save requests by add caching in seconds
+          - url: "https://somehost.local/host/id?={{ results.hosts[0] }}" # use result from first response
+            name: host
+            method: GET
+            ssl_verify: false
+            headers: *header
+            cache: *cache
+        mapping: &mapping # all values are templated
+          client_ip_address: "{{ result.host.ip }}" # extract ip from result
+          subnet_mask:  # option name
+            required: true  # fail offer sending if subnet is missing or templating fails
+            data: 255.255.255.0 # static data
+          router:
+            data:
+              - 192.168.56.1
+          ip_address_lease_time:
+            data: 7200
+          own_custom_option:
+            tag: 200
+            data: "{{ result.host.description }}"
+            kind: string
+      reserve:  # reserve ip address in backend
+        scripts:
+          queries:
+            - url: "https://dhcbdb.local/host?mac={{ client_hardware_address }}"
+              name: host
+              method: POST
+              headers: *header
+              cache: *cache
+              body:
+                reserved: true
+                lease: 7200
+          mapping: *mapping
+      release:  # ip release by client
+        scripts:
+          queries:
+            - url: "https://dhcbdb.local/host?ip={{ client_ip_address }}"
+              name: host
+              method: POST
+              headers: *header
+              cache: *cache
+              body:
+                reserved: false
+          mapping: *mapping
+      inform: *offer  # dhcp inform packet
+      decline: *offer # dhcp decline packet
